@@ -12,7 +12,7 @@ import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from svd_repl import SVDManager, REPLEnvironment, format_arc_question
+from svd_repl import SVDManager, REPLEnvironment, format_arc_question, normalize_gold
 
 
 def main():
@@ -56,11 +56,11 @@ def main():
 
     question = prob["question"]
     choices = prob["choices"]
-    gold_label = prob["answerKey"]
+    gold_label = normalize_gold(choices, prob["answerKey"])
 
     q_text = format_arc_question(question, choices)
-    gold_idx = choices["label"].index(gold_label)
-    gold_text = choices["text"][gold_idx]
+    raw_idx = choices["label"].index(prob["answerKey"])
+    gold_text = choices["text"][raw_idx]
 
     print(f"\nProblem index: {idx}")
     print(f"Gold answer: {gold_label}) {gold_text}")

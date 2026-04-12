@@ -231,13 +231,25 @@ def strip_thinking(text):
     return text.strip()
 
 
+STANDARD_LABELS = ["A", "B", "C", "D", "E"]
+
+
 def format_arc_question(question, choices):
+    """Format question with normalized A/B/C/D labels regardless of dataset format."""
     lines = [question]
-    labels = choices.get("label", [])
     texts = choices.get("text", [])
-    for label, text in zip(labels, texts):
-        lines.append(f"{label}) {text}")
+    for i, text in enumerate(texts):
+        lines.append(f"{STANDARD_LABELS[i]}) {text}")
     return "\n".join(lines)
+
+
+def normalize_gold(choices, answer_key):
+    """Map the dataset's answer_key (could be '1','2','3','4' or 'A','B','C','D') to A/B/C/D."""
+    original_labels = choices.get("label", [])
+    if answer_key in original_labels:
+        idx = original_labels.index(answer_key)
+        return STANDARD_LABELS[idx]
+    return answer_key.upper()
 
 
 def extract_letter(text):
@@ -313,10 +325,11 @@ class REPLEnvironment:
 
     def baseline_solve(self, question, choices, gold_label):
         self.svd_manager.reset_all()
+        gold_label = normalize_gold(choices, gold_label)
         q_text = format_arc_question(question, choices)
         answer_text = self._solve_question(q_text)
         pred = extract_letter(answer_text)
-        correct = (pred is not None and pred == gold_label.upper())
+        correct = (pred is not None and pred == gold_label)
         return answer_text, pred, correct
 
     def _extract_code(self, text):
@@ -354,9 +367,10 @@ class REPLEnvironment:
             return f"Error:\n{traceback.format_exc()}"
 
     def run_episode(self, question, choices, gold_label, run_baseline=True):
+        gold_label = normalize_gold(choices, gold_label)
         q_text = format_arc_question(question, choices)
         episode = Episode(
-            question=question, choices=choices, gold_label=gold_label.upper()
+            question=question, choices=choices, gold_label=gold_label
         )
 
         # Baseline
