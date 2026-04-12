@@ -116,6 +116,7 @@ def build_system_prompt(max_turns):
         "- You MUST call scale_direction() at least once before calling solve()\n"
         "- You MUST call solve() to get your answer. Do NOT guess the answer.\n"
         "- Output FINAL(X) where X is just the letter (A, B, C, D, or E)\n"
+        "- You cannot submit FINAL until you have configured weights and called solve\n"
         "\n"
         "Available functions:\n"
         "  list_layers()                                             -> model info\n"
@@ -209,7 +210,7 @@ class Turn:
 class Episode:
     question: str
     choices: list
-    gold_label: str           # "A", "B", "C", etc.
+    gold_label: str
     turns: list = field(default_factory=list)
     final_answer: str = None
     correct: bool = False
@@ -231,7 +232,6 @@ def strip_thinking(text):
 
 
 def format_arc_question(question, choices):
-    """Format an ARC question with labeled choices."""
     lines = [question]
     labels = choices.get("label", [])
     texts = choices.get("text", [])
@@ -241,18 +241,14 @@ def format_arc_question(question, choices):
 
 
 def extract_letter(text):
-    """Extract a multiple-choice letter answer from text."""
     if text is None:
         return None
     text = text.strip().upper()
-    # Direct single letter
     if text in ("A", "B", "C", "D", "E"):
         return text
-    # "The answer is B" pattern
     match = re.search(r"(?:answer|choice)\s*(?:is|:)\s*([A-E])", text, re.IGNORECASE)
     if match:
         return match.group(1).upper()
-    # Just find any standalone letter A-E
     match = re.search(r"\b([A-E])\b", text)
     if match:
         return match.group(1).upper()
@@ -291,7 +287,6 @@ class REPLEnvironment:
         return strip_thinking(text)
 
     def _solve_question(self, question_text):
-        """Run model on question with CURRENT weights."""
         messages = [
             {"role": "user", "content": (
                 "Answer the following multiple-choice question. "
@@ -317,7 +312,6 @@ class REPLEnvironment:
         return strip_thinking(text)
 
     def baseline_solve(self, question, choices, gold_label):
-        """Solve with unmodified weights, no REPL."""
         self.svd_manager.reset_all()
         q_text = format_arc_question(question, choices)
         answer_text = self._solve_question(q_text)
@@ -373,17 +367,24 @@ class REPLEnvironment:
             episode.baseline_correct = baseline_correct
             episode.baseline_answer = baseline_pred
 
-        # Track whether solve() was called
+        # Tracked tool calls
+        scale_called = [False]
         solve_called = [False]
+
+        def tracked_scale(layer_idx, matrix_name, direction_idx, scale_factor):
+            scale_called[0] = True
+            return self.svd_manager.scale_direction(
+                layer_idx, matrix_name, direction_idx, scale_factor
+            )
+
         def tracked_solve(q):
             solve_called[0] = True
             return self._solve_question(q)
 
-        # REPL namespace
         namespace = {
             "list_layers": self.svd_manager.list_layers,
             "get_spectrum": self.svd_manager.get_spectrum,
-            "scale_direction": self.svd_manager.scale_direction,
+            "scale_direction": tracked_scale,
             "reset_all": self.svd_manager.reset_all,
             "solve": tracked_solve,
             "print": print,
@@ -398,40 +399,83 @@ class REPLEnvironment:
         for turn_idx in range(self.max_turns):
             response = self._generate(messages)
 
-            final = self._extract_final(response)
-            if final is not None:
-                episode.turns.append(Turn(role="assistant", content=response))
-                episode.final_answer = extract_letter(final)
-                break
-
+            # --- STEP 1: Execute code if present (BEFORE checking FINAL) ---
             code = self._extract_code(response)
-            if code is None:
-                episode.turns.append(Turn(role="assistant", content=response))
-                messages.append({"role": "assistant", "content": response})
-                nudge = (
-                    "You must write Python code in a " + CB + "python block. "
-                    "Call scale_direction() to modify weights, then solve() "
-                    "to answer the question. Do NOT answer directly."
+            if code is not None:
+                episode.turns.append(
+                    Turn(role="assistant", content=response, code=code)
                 )
-                messages.append({"role": "user", "content": nudge})
+                messages.append({"role": "assistant", "content": response})
+
+                output = self._execute_code(code, namespace)
+                episode.turns.append(Turn(role="tool", content=output))
+                messages.append({"role": "user",
+                                 "content": f"REPL output:\n{CB}\n{output}\n{CB}"})
+
+                # After executing code, check if FINAL was also in this turn
+                final = self._extract_final(response)
+                if final is not None and scale_called[0] and solve_called[0]:
+                    episode.final_answer = extract_letter(final)
+                    break
+                elif final is not None:
+                    # FINAL given but prerequisites not met; already executed
+                    # code and fed back output, so the loop continues naturally
+                    pass
+
+                # Update tracking flags
+                if scale_called[0]:
+                    episode.used_tools = True
+
                 continue
 
-            # Check if code uses scale_direction
-            if "scale_direction" in code:
-                episode.used_tools = True
+            # --- STEP 2: No code block. Check for FINAL. ---
+            final = self._extract_final(response)
+            if final is not None:
+                if scale_called[0] and solve_called[0]:
+                    # All prerequisites met, accept answer
+                    episode.turns.append(
+                        Turn(role="assistant", content=response)
+                    )
+                    episode.final_answer = extract_letter(final)
+                    break
+                else:
+                    # Reject: prerequisites not met
+                    episode.turns.append(
+                        Turn(role="assistant", content=response)
+                    )
+                    messages.append({"role": "assistant", "content": response})
+                    missing = []
+                    if not scale_called[0]:
+                        missing.append(
+                            "call scale_direction() to configure your weights"
+                        )
+                    if not solve_called[0]:
+                        missing.append(
+                            "call solve() to answer with your configured weights"
+                        )
+                    nudge = (
+                        "You cannot submit a final answer yet. You still need to: "
+                        + " and ".join(missing) + ". "
+                        "Write Python code in a " + CB + "python block."
+                    )
+                    messages.append({"role": "user", "content": nudge})
+                    continue
 
-            episode.turns.append(Turn(role="assistant", content=response, code=code))
+            # --- STEP 3: Neither code nor FINAL ---
+            episode.turns.append(Turn(role="assistant", content=response))
             messages.append({"role": "assistant", "content": response})
+            nudge = (
+                "You must write Python code in a " + CB + "python block. "
+                "Call scale_direction() to modify weights, then solve() "
+                "to answer the question. Do NOT answer directly."
+            )
+            messages.append({"role": "user", "content": nudge})
 
-            output = self._execute_code(code, namespace)
-            episode.turns.append(Turn(role="tool", content=output))
-            messages.append({"role": "user",
-                             "content": f"REPL output:\n{CB}\n{output}\n{CB}"})
-
-        # Fallback
+        # Fallback: extract from last turn
         if episode.final_answer is None and episode.turns:
             episode.final_answer = extract_letter(episode.turns[-1].content)
 
+        episode.used_tools = scale_called[0]
         episode.called_solve = solve_called[0]
         episode.num_modifications = len(self.svd_manager.active_deltas)
         episode.correct = (episode.final_answer is not None
