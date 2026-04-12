@@ -29,8 +29,13 @@ def extract_answer(text):
 def math_reward(completions, answer, **kwargs):
     rewards = []
     for completion, ans in zip(completions, answer):
+        # completions are chat message lists, e.g. [{"role": "assistant", "content": "..."}]
+        if isinstance(completion, list):
+            text = completion[-1]["content"]
+        else:
+            text = completion
         gold = extract_answer(ans)
-        pred = extract_answer(completion)
+        pred = extract_answer(text)
         rewards.append(1.0 if pred and gold and pred == gold else 0.0)
     return rewards
 
