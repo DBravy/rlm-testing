@@ -1,5 +1,6 @@
 """
 SVD REPL Environment for Self-Configuring Language Models
+Adapted for ARC (AI2 Reasoning Challenge) multiple-choice questions.
 """
 
 import re
@@ -10,8 +11,6 @@ from dataclasses import dataclass, field
 
 import torch
 
-# Code block delimiter, built this way so it doesn't interfere with any
-# outer templating or file-creation tools.
 CB = chr(96) * 3  # triple backtick
 
 
@@ -99,93 +98,99 @@ class SVDManager:
 
 
 # ---------------------------------------------------------------------------
-# System prompt with few-shot examples
+# System prompt
 # ---------------------------------------------------------------------------
 
 def build_system_prompt(max_turns):
-    """
-    Builds the system prompt with embedded few-shot examples.
-    Constructed as a function so we can use CB for code fences cleanly.
-    """
     return (
         "You are a self-configuring language model. You have a Python REPL "
-        "that lets you inspect and modify your own weights via SVD direction "
-        "scaling, then solve a math problem with those modified weights.\n"
+        "that lets you modify your own neural network weights via SVD direction "
+        "scaling before answering a multiple-choice question.\n"
         "\n"
-        "IMPORTANT: You MUST use the REPL. Do NOT solve the problem in your "
-        "head or output an answer directly. Your job is to:\n"
-        "1. Explore the model structure\n"
-        "2. Configure weights using scale_direction()\n"
-        "3. Call solve(question) to get an answer with your modified weights\n"
-        "4. Output FINAL(number) with the result\n"
+        "The answer to these questions is KNOWLEDGE that lives in your weights. "
+        "Python cannot compute the answer. You must call solve() to use your "
+        "language model capabilities. Your goal is to configure your weights "
+        "to improve your ability to answer correctly.\n"
+        "\n"
+        "RULES:\n"
+        "- You MUST call scale_direction() at least once before calling solve()\n"
+        "- You MUST call solve() to get your answer. Do NOT guess the answer.\n"
+        "- Output FINAL(X) where X is just the letter (A, B, C, D, or E)\n"
         "\n"
         "Available functions:\n"
-        "  list_layers()                                          -> model info\n"
-        "  get_spectrum(layer_idx, matrix_name)                   -> singular values\n"
-        "  scale_direction(layer_idx, matrix_name, dir_idx, factor) -> apply scaling\n"
-        "  reset_all()                                            -> undo all mods\n"
-        "  solve(question)                                        -> answer with current weights\n"
+        "  list_layers()                                             -> model info\n"
+        "  get_spectrum(layer_idx, matrix_name)                      -> singular values\n"
+        "  scale_direction(layer_idx, matrix_name, dir_idx, factor)  -> apply scaling\n"
+        "  reset_all()                                               -> undo all mods\n"
+        "  solve(question)                    -> answer question with current weights\n"
         "\n"
-        f"Write code in {CB}python ... {CB} blocks. When done: FINAL(number)\n"
-        f"Max {max_turns} code blocks.\n"
+        f"Write code in {CB}python ... {CB} blocks. Max {max_turns} blocks.\n"
         "\n"
-        "=== EXAMPLE INTERACTION ===\n"
+        "=== EXAMPLE ===\n"
         "\n"
-        "User: Math problem to solve:\n"
+        "User: Question:\n"
         "\n"
-        "A store sells 45 widgets at $3 each. What is the total revenue?\n"
+        "What causes the seasons on Earth?\n"
+        "A) Distance from the sun\n"
+        "B) Tilt of Earth's axis\n"
+        "C) Speed of Earth's rotation\n"
+        "D) The moon's gravitational pull\n"
         "\n"
-        "Assistant: I will explore the model and configure weights for this "
-        "arithmetic task.\n"
+        "Assistant: Let me explore the model and configure weights for "
+        "this science question.\n"
         "\n"
         f"{CB}python\n"
         "info = list_layers()\n"
-        "print(f\"Layers: {info['num_layers']}\")\n"
-        "print(f\"Matrices: {info['matrices'][:3]}\")\n"
-        f"{CB}\n"
-        "\n"
-        "User: REPL output:\n"
-        f"{CB}\n"
-        "Layers: 28\n"
-        "Matrices: ['self_attn.o_proj', 'self_attn.q_proj', 'self_attn.k_proj']\n"
-        f"{CB}\n"
-        "\n"
-        "Assistant: Let me check singular values in a mid-layer and apply scaling.\n"
-        "\n"
-        f"{CB}python\n"
+        "print(f\"Layers: {{info['num_layers']}}, Directions: {{info['max_directions']}}\")\n"
         "spec = get_spectrum(14, \"self_attn.o_proj\")\n"
-        "print(f\"Top 5 values: {spec[:5]}\")\n"
-        "print(scale_direction(14, \"self_attn.o_proj\", 0, 1.5))\n"
-        "print(scale_direction(14, \"mlp.up_proj\", 1, 0.7))\n"
+        "print(f\"Layer 14 attn spectrum: {{[round(s,1) for s in spec[:5]]}}\")\n"
         f"{CB}\n"
         "\n"
         "User: REPL output:\n"
         f"{CB}\n"
-        "Top 5 values: [142.3, 89.1, 45.7, 32.1, 28.4]\n"
-        "Scaled layer 14 self_attn.o_proj direction 0 by 1.5\n"
-        "Scaled layer 14 mlp.up_proj direction 1 by 0.7\n"
+        "Layers: 28, Directions: 20\n"
+        "Layer 14 attn spectrum: [142.3, 89.1, 45.7, 32.1, 28.4]\n"
         f"{CB}\n"
         "\n"
-        "Assistant: Good. Now solving with modified weights.\n"
+        "Assistant: I will scale some directions in the mid and late layers "
+        "to enhance knowledge retrieval.\n"
         "\n"
         f"{CB}python\n"
-        "answer = solve(\"A store sells 45 widgets at $3 each. "
-        "What is the total revenue?\")\n"
+        "print(scale_direction(14, \"self_attn.o_proj\", 0, 1.3))\n"
+        "print(scale_direction(20, \"mlp.up_proj\", 1, 1.5))\n"
+        "print(scale_direction(24, \"self_attn.v_proj\", 0, 0.8))\n"
+        f"{CB}\n"
+        "\n"
+        "User: REPL output:\n"
+        f"{CB}\n"
+        "Scaled layer 14 self_attn.o_proj direction 0 by 1.3\n"
+        "Scaled layer 20 mlp.up_proj direction 1 by 1.5\n"
+        "Scaled layer 24 self_attn.v_proj direction 0 by 0.8\n"
+        f"{CB}\n"
+        "\n"
+        "Assistant: Now let me solve with the modified weights.\n"
+        "\n"
+        f"{CB}python\n"
+        "q = \"\"\"What causes the seasons on Earth?\n"
+        "A) Distance from the sun\n"
+        "B) Tilt of Earth's axis\n"
+        "C) Speed of Earth's rotation\n"
+        "D) The moon's gravitational pull\"\"\"\n"
+        "answer = solve(q)\n"
         "print(answer)\n"
         f"{CB}\n"
         "\n"
         "User: REPL output:\n"
         f"{CB}\n"
-        "45 widgets times $3 each equals $135. The total revenue is $135.\n"
-        "#### 135\n"
+        "The seasons are caused by the tilt of Earth's axis. The answer is B.\n"
         f"{CB}\n"
         "\n"
-        "Assistant: FINAL(135)\n"
+        "Assistant: FINAL(B)\n"
         "\n"
         "=== END EXAMPLE ===\n"
         "\n"
-        "Now solve the given problem. Start by exploring, configure weights, "
-        "call solve(), then output FINAL(number)."
+        "Now solve the given question. Explore, configure with scale_direction(), "
+        "call solve(), then FINAL(letter)."
     )
 
 
@@ -195,7 +200,7 @@ def build_system_prompt(max_turns):
 
 @dataclass
 class Turn:
-    role: str           # "assistant" or "tool"
+    role: str
     content: str
     code: str = ""
 
@@ -203,12 +208,14 @@ class Turn:
 @dataclass
 class Episode:
     question: str
-    gold_answer: str
+    choices: list
+    gold_label: str           # "A", "B", "C", etc.
     turns: list = field(default_factory=list)
     final_answer: str = None
     correct: bool = False
     num_modifications: int = 0
     used_tools: bool = False
+    called_solve: bool = False
     baseline_correct: bool = False
     baseline_answer: str = None
 
@@ -218,44 +225,38 @@ class Episode:
 # ---------------------------------------------------------------------------
 
 def strip_thinking(text):
-    """Remove <think>...</think> blocks from model output."""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL)
     return text.strip()
 
 
-def extract_number(text):
-    """Extract the last number from text."""
+def format_arc_question(question, choices):
+    """Format an ARC question with labeled choices."""
+    lines = [question]
+    labels = choices.get("label", [])
+    texts = choices.get("text", [])
+    for label, text in zip(labels, texts):
+        lines.append(f"{label}) {text}")
+    return "\n".join(lines)
+
+
+def extract_letter(text):
+    """Extract a multiple-choice letter answer from text."""
     if text is None:
         return None
-    match = re.search(r"####\s*(-?[\d,]+\.?\d*)", text)
+    text = text.strip().upper()
+    # Direct single letter
+    if text in ("A", "B", "C", "D", "E"):
+        return text
+    # "The answer is B" pattern
+    match = re.search(r"(?:answer|choice)\s*(?:is|:)\s*([A-E])", text, re.IGNORECASE)
     if match:
-        return match.group(1).replace(",", "")
-    numbers = re.findall(r"-?\d[\d,]*\.?\d*", text)
-    if numbers:
-        return numbers[-1].replace(",", "")
+        return match.group(1).upper()
+    # Just find any standalone letter A-E
+    match = re.search(r"\b([A-E])\b", text)
+    if match:
+        return match.group(1).upper()
     return None
-
-
-def extract_gold(gold_answer):
-    """Extract gold number from GSM8K answer format."""
-    match = re.search(r"####\s*(-?[\d,]+)", gold_answer)
-    if match:
-        return match.group(1).replace(",", "")
-    numbers = re.findall(r"-?\d[\d,]*\.?\d*", gold_answer)
-    return numbers[-1].replace(",", "") if numbers else None
-
-
-def answers_match(pred, gold):
-    """Check if predicted and gold answers match."""
-    if pred is None or gold is None:
-        return False
-    if pred == gold:
-        return True
-    try:
-        return abs(float(pred) - float(gold)) < 1e-6
-    except ValueError:
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +265,7 @@ def answers_match(pred, gold):
 
 class REPLEnvironment:
     def __init__(self, model, tokenizer, svd_manager, max_turns=8,
-                 max_new_tokens=1024, solve_max_tokens=512):
+                 max_new_tokens=1024, solve_max_tokens=256):
         self.model = model
         self.tokenizer = tokenizer
         self.svd_manager = svd_manager
@@ -289,13 +290,14 @@ class REPLEnvironment:
         text = self.tokenizer.decode(generated, skip_special_tokens=True)
         return strip_thinking(text)
 
-    def _solve_math(self, question):
-        """Run model on a math problem with CURRENT (possibly modified) weights."""
+    def _solve_question(self, question_text):
+        """Run model on question with CURRENT weights."""
         messages = [
             {"role": "user", "content": (
-                "Solve this math problem. Show your work step by step. "
-                "End with your final numerical answer after '####'.\n\n"
-                + question
+                "Answer the following multiple-choice question. "
+                "State your reasoning briefly, then give your final answer "
+                "as a single letter (A, B, C, D, or E).\n\n"
+                + question_text
             )}
         ]
         prompt = self.tokenizer.apply_chat_template(
@@ -314,25 +316,20 @@ class REPLEnvironment:
         text = self.tokenizer.decode(generated, skip_special_tokens=True)
         return strip_thinking(text)
 
-    def baseline_solve(self, question, gold_answer):
-        """
-        Solve with unmodified weights, no REPL. Returns (text, pred, correct).
-        For tracking whether SVD/REPL actually helped.
-        """
+    def baseline_solve(self, question, choices, gold_label):
+        """Solve with unmodified weights, no REPL."""
         self.svd_manager.reset_all()
-        answer_text = self._solve_math(question)
-        pred = extract_number(answer_text)
-        gold = extract_gold(gold_answer)
-        correct = answers_match(pred, gold)
+        q_text = format_arc_question(question, choices)
+        answer_text = self._solve_question(q_text)
+        pred = extract_letter(answer_text)
+        correct = (pred is not None and pred == gold_label.upper())
         return answer_text, pred, correct
 
     def _extract_code(self, text):
-        # Try python-tagged blocks first
         pattern = CB + r"python\s*\n(.*?)" + CB
         matches = re.findall(pattern, text, re.DOTALL)
         if matches:
             return matches[0].strip()
-        # Try untagged blocks
         pattern = CB + r"\s*\n(.*?)" + CB
         matches = re.findall(pattern, text, re.DOTALL)
         if matches:
@@ -362,16 +359,25 @@ class REPLEnvironment:
             sys.stdout = old_stdout
             return f"Error:\n{traceback.format_exc()}"
 
-    def run_episode(self, question, gold_answer, run_baseline=True):
-        episode = Episode(question=question, gold_answer=gold_answer)
+    def run_episode(self, question, choices, gold_label, run_baseline=True):
+        q_text = format_arc_question(question, choices)
+        episode = Episode(
+            question=question, choices=choices, gold_label=gold_label.upper()
+        )
 
-        # Baseline comparison
+        # Baseline
         if run_baseline:
             _, baseline_pred, baseline_correct = self.baseline_solve(
-                question, gold_answer
+                question, choices, gold_label
             )
             episode.baseline_correct = baseline_correct
             episode.baseline_answer = baseline_pred
+
+        # Track whether solve() was called
+        solve_called = [False]
+        def tracked_solve(q):
+            solve_called[0] = True
+            return self._solve_question(q)
 
         # REPL namespace
         namespace = {
@@ -379,42 +385,41 @@ class REPLEnvironment:
             "get_spectrum": self.svd_manager.get_spectrum,
             "scale_direction": self.svd_manager.scale_direction,
             "reset_all": self.svd_manager.reset_all,
-            "solve": self._solve_math,
+            "solve": tracked_solve,
             "print": print,
         }
 
         system = build_system_prompt(self.max_turns)
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"Math problem to solve:\n\n{question}"},
+            {"role": "user", "content": f"Question:\n\n{q_text}"},
         ]
 
-        # REPL loop
         for turn_idx in range(self.max_turns):
             response = self._generate(messages)
 
-            # Check for final answer
             final = self._extract_final(response)
             if final is not None:
                 episode.turns.append(Turn(role="assistant", content=response))
-                episode.final_answer = final
+                episode.final_answer = extract_letter(final)
                 break
 
-            # Check for code
             code = self._extract_code(response)
             if code is None:
                 episode.turns.append(Turn(role="assistant", content=response))
                 messages.append({"role": "assistant", "content": response})
                 nudge = (
-                    "You must write Python code in a " + CB + "python block to "
-                    "use the REPL tools. Do not solve the problem directly. "
-                    "Use the tools to configure weights, then call solve(question)."
+                    "You must write Python code in a " + CB + "python block. "
+                    "Call scale_direction() to modify weights, then solve() "
+                    "to answer the question. Do NOT answer directly."
                 )
                 messages.append({"role": "user", "content": nudge})
                 continue
 
-            # Execute code
-            episode.used_tools = True
+            # Check if code uses scale_direction
+            if "scale_direction" in code:
+                episode.used_tools = True
+
             episode.turns.append(Turn(role="assistant", content=response, code=code))
             messages.append({"role": "assistant", "content": response})
 
@@ -423,17 +428,15 @@ class REPLEnvironment:
             messages.append({"role": "user",
                              "content": f"REPL output:\n{CB}\n{output}\n{CB}"})
 
-        # Fallback: extract from last turn if no FINAL
+        # Fallback
         if episode.final_answer is None and episode.turns:
-            episode.final_answer = extract_number(episode.turns[-1].content)
+            episode.final_answer = extract_letter(episode.turns[-1].content)
 
-        # Score
+        episode.called_solve = solve_called[0]
         episode.num_modifications = len(self.svd_manager.active_deltas)
-        pred = extract_number(episode.final_answer)
-        gold = extract_gold(gold_answer)
-        episode.correct = answers_match(pred, gold)
+        episode.correct = (episode.final_answer is not None
+                           and episode.final_answer == episode.gold_label)
 
-        # Reset
         self.svd_manager.reset_all()
         return episode
 
@@ -444,9 +447,10 @@ class REPLEnvironment:
 
 def episode_to_messages(episode):
     system = build_system_prompt(8)
+    q_text = format_arc_question(episode.question, episode.choices)
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"Math problem to solve:\n\n{episode.question}"},
+        {"role": "user", "content": f"Question:\n\n{q_text}"},
     ]
     for turn in episode.turns:
         if turn.role == "assistant":

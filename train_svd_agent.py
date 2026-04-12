@@ -1,17 +1,14 @@
 """
-SVD Self-Configuration Training (STaR-style)
+SVD Self-Configuration Training on ARC-Easy (STaR-style)
 
-1. Run episodes where the model configures its weights via REPL, then solves math
-2. Collect successful trajectories
+1. Run episodes: model configures weights via REPL, answers science questions
+2. Collect successful trajectories (where tools were used AND answer is correct)
 3. Fine-tune on those trajectories
 4. Repeat
-
-Also tracks baseline performance (no REPL) for comparison at each round.
 
 Usage:
     python train_svd_agent.py
     python train_svd_agent.py --num_rounds 5 --episodes_per_round 50
-    python train_svd_agent.py --no_lora  # full fine-tuning
 """
 
 import argparse
@@ -23,18 +20,12 @@ from pathlib import Path
 import torch
 from datasets import load_dataset, Dataset
 from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    TrainingArguments,
-    Trainer,
-    DataCollatorForSeq2Seq,
+    AutoModelForCausalLM, AutoTokenizer,
+    TrainingArguments, Trainer, DataCollatorForSeq2Seq,
 )
 from peft import LoraConfig, get_peft_model, TaskType
 
 from svd_repl import SVDManager, REPLEnvironment, episode_to_messages
-
-
-DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
 
 
 def collect_episodes(repl_env, problems, num_episodes, verbose=True):
@@ -45,21 +36,25 @@ def collect_episodes(repl_env, problems, num_episodes, verbose=True):
     for i, prob in enumerate(sampled):
         t0 = time.time()
         episode = repl_env.run_episode(
-            prob["question"], prob["answer"], run_baseline=True
+            prob["question"], prob["choices"], prob["answerKey"],
+            run_baseline=True,
         )
         elapsed = time.time() - t0
         all_episodes.append(episode)
-        if episode.correct:
+
+        # Only count as success if tools were actually used
+        if episode.correct and episode.used_tools and episode.called_solve:
             successes.append(episode)
 
         if verbose:
             status = "CORRECT" if episode.correct else "wrong"
             base = "base:Y" if episode.baseline_correct else "base:N"
-            tools = "tools:Y" if episode.used_tools else "tools:N"
-            mods = episode.num_modifications
+            tools = "svd:Y" if episode.used_tools else "svd:N"
+            solved = "solve:Y" if episode.called_solve else "solve:N"
             print(f"  [{i+1}/{num_episodes}] {status} | {base} | {tools} | "
-                  f"{mods} mods | {elapsed:.1f}s | "
-                  f"pred={episode.final_answer}")
+                  f"{solved} | {episode.num_modifications} mods | "
+                  f"{elapsed:.1f}s | pred={episode.final_answer} "
+                  f"gold={episode.gold_label}")
 
     return successes, all_episodes
 
@@ -85,12 +80,11 @@ def prepare_sft_dataset(episodes, tokenizer, max_length=2048):
 
 def sft_step(model, tokenizer, episodes, output_dir, round_idx, lr=2e-5):
     if not episodes:
-        print("  No successful episodes to train on, skipping SFT.")
+        print("  No qualifying episodes for SFT, skipping.")
         return
 
-    print(f"  Preparing SFT from {len(episodes)} successful episodes...")
+    print(f"  SFT on {len(episodes)} episodes...")
     samples = prepare_sft_dataset(episodes, tokenizer)
-
     dataset = Dataset.from_dict({
         "input_ids": [s["input_ids"] for s in samples],
         "labels": [s["labels"] for s in samples],
@@ -98,22 +92,20 @@ def sft_step(model, tokenizer, episodes, output_dir, round_idx, lr=2e-5):
     })
     dataset.set_format("torch")
 
-    training_args = TrainingArguments(
-        output_dir=f"{output_dir}/round_{round_idx}",
-        num_train_epochs=2,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=4,
-        learning_rate=lr,
-        bf16=True,
-        logging_steps=1,
-        save_strategy="no",
-        remove_unused_columns=False,
-        report_to="none",
-    )
-
     trainer = Trainer(
         model=model,
-        args=training_args,
+        args=TrainingArguments(
+            output_dir=f"{output_dir}/round_{round_idx}",
+            num_train_epochs=2,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=4,
+            learning_rate=lr,
+            bf16=True,
+            logging_steps=1,
+            save_strategy="no",
+            remove_unused_columns=False,
+            report_to="none",
+        ),
         train_dataset=dataset,
         data_collator=DataCollatorForSeq2Seq(
             tokenizer=tokenizer, padding=True, return_tensors="pt",
@@ -155,8 +147,10 @@ def main(args):
         max_turns=args.max_turns,
     )
 
-    print("Loading GSM8K...")
-    dataset = load_dataset("openai/gsm8k", "main", split="train")
+    # Load ARC-Easy
+    arc_name = "ARC-Easy" if args.split == "easy" else "ARC-Challenge"
+    print(f"Loading {arc_name}...")
+    dataset = load_dataset("allenai/ai2_arc", arc_name, split="train")
     problems = list(dataset.select(range(min(args.max_problems, len(dataset)))))
     random.shuffle(problems)
 
@@ -175,79 +169,78 @@ def main(args):
             repl_env, problems, args.episodes_per_round
         )
 
-        # Compute stats
         n = len(all_episodes)
-        n_correct = len(successes)
-        n_baseline_correct = sum(1 for e in all_episodes if e.baseline_correct)
-        n_used_tools = sum(1 for e in all_episodes if e.used_tools)
+        n_correct = sum(1 for e in all_episodes if e.correct)
+        n_baseline = sum(1 for e in all_episodes if e.baseline_correct)
+        n_tools = sum(1 for e in all_episodes if e.used_tools)
+        n_solved = sum(1 for e in all_episodes if e.called_solve)
+        n_qualified = len(successes)  # correct AND used tools AND called solve
         n_helped = sum(1 for e in all_episodes
-                       if e.correct and not e.baseline_correct)
+                       if e.correct and not e.baseline_correct
+                       and e.used_tools)
         n_hurt = sum(1 for e in all_episodes
                      if not e.correct and e.baseline_correct)
 
         print(f"\nRound {round_idx+1} summary:")
-        print(f"  REPL correct:     {n_correct}/{n} ({n_correct/n:.1%})")
-        print(f"  Baseline correct: {n_baseline_correct}/{n} ({n_baseline_correct/n:.1%})")
-        print(f"  Used tools:       {n_used_tools}/{n} ({n_used_tools/n:.1%})")
-        print(f"  REPL helped:      {n_helped} (solved what baseline couldn't)")
-        print(f"  REPL hurt:        {n_hurt} (baseline solved, REPL didn't)")
+        print(f"  Total correct:        {n_correct}/{n} ({n_correct/n:.1%})")
+        print(f"  Baseline correct:     {n_baseline}/{n} ({n_baseline/n:.1%})")
+        print(f"  Used scale_direction: {n_tools}/{n}")
+        print(f"  Called solve():       {n_solved}/{n}")
+        print(f"  Qualified for SFT:    {n_qualified}/{n} (correct + tools + solve)")
+        print(f"  SVD helped:           {n_helped}")
+        print(f"  SVD hurt:             {n_hurt}")
 
         cumulative_successes.extend(successes)
 
         stats = {
-            "round": round_idx + 1,
-            "total": n,
-            "repl_correct": n_correct,
-            "baseline_correct": n_baseline_correct,
-            "used_tools": n_used_tools,
-            "repl_helped": n_helped,
-            "repl_hurt": n_hurt,
-            "cumulative_successes": len(cumulative_successes),
+            "round": round_idx + 1, "total": n,
+            "correct": n_correct, "baseline_correct": n_baseline,
+            "used_tools": n_tools, "called_solve": n_solved,
+            "qualified_sft": n_qualified,
+            "helped": n_helped, "hurt": n_hurt,
+            "cumulative_sft": len(cumulative_successes),
         }
         all_stats.append(stats)
 
-        # SFT on successes
+        # SFT
         if successes:
             train_episodes = successes
             if len(cumulative_successes) > len(successes):
                 older = [e for e in cumulative_successes if e not in successes]
-                sample_size = min(len(older), len(successes))
-                if sample_size > 0:
-                    train_episodes = successes + random.sample(older, sample_size)
-
-            print(f"\nSFT on {len(train_episodes)} episodes...")
+                k = min(len(older), len(successes))
+                if k > 0:
+                    train_episodes = successes + random.sample(older, k)
             sft_step(model, tokenizer, train_episodes, str(output_dir),
                      round_idx, lr=args.learning_rate)
 
-        # Save
         save_path = output_dir / f"round_{round_idx}"
         save_path.mkdir(parents=True, exist_ok=True)
         model.save_pretrained(str(save_path))
         tokenizer.save_pretrained(str(save_path))
 
-    # Final summary
     print(f"\n{'=' * 60}")
     print("TRAINING COMPLETE")
     print(f"{'=' * 60}")
     for s in all_stats:
         print(f"  Round {s['round']}: "
-              f"repl={s['repl_correct']}/{s['total']} "
+              f"correct={s['correct']}/{s['total']} "
               f"baseline={s['baseline_correct']}/{s['total']} "
-              f"tools_used={s['used_tools']}/{s['total']} "
-              f"helped={s['repl_helped']} hurt={s['repl_hurt']}")
+              f"tools={s['used_tools']} solve={s['called_solve']} "
+              f"sft_qualified={s['qualified_sft']} "
+              f"helped={s['helped']} hurt={s['hurt']}")
 
-    stats_path = output_dir / "training_stats.json"
-    with open(stats_path, "w") as f:
+    with open(output_dir / "training_stats.json", "w") as f:
         json.dump(all_stats, f, indent=2)
-    print(f"\nStats saved to {stats_path}")
+    print(f"\nStats saved to {output_dir / 'training_stats.json'}")
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model", default="Qwen/Qwen3-0.6B")
+    parser.add_argument("--split", default="easy", choices=["easy", "challenge"])
     parser.add_argument("--num_rounds", type=int, default=5)
     parser.add_argument("--episodes_per_round", type=int, default=50)
-    parser.add_argument("--max_problems", type=int, default=200)
+    parser.add_argument("--max_problems", type=int, default=500)
     parser.add_argument("--max_turns", type=int, default=6)
     parser.add_argument("--max_directions", type=int, default=20)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
