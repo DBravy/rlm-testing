@@ -1,0 +1,28 @@
+# Claude Code
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environments
+.env
+.venv/
+
+# Model checkpoints and training outputs
+qwen3-06b-math-grpo/
+checkpoints/
+*.pt
+*.bin
+*.safetensors
+wandb/
+runs/
+
+# Hugging Face cache
+.cache/
+
+# OS
+.DS_Store
