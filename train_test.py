@@ -43,10 +43,10 @@ def math_reward(completions, answer, **kwargs):
 config = GRPOConfig(
     output_dir="qwen3-06b-math-grpo",
     num_train_epochs=1,
-    per_device_train_batch_size=4,
-    gradient_accumulation_steps=2,
-    num_generations=8,          # completions per prompt
-    max_completion_length=512,  # max tokens per completion
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
+    num_generations=4,          # completions per prompt
+    max_completion_length=256,  # max tokens per completion
     logging_steps=1,
     save_steps=50,
     learning_rate=1e-5,
