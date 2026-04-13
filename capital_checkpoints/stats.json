@@ -1,0 +1,55 @@
+[
+  {
+    "round": 0,
+    "phase": "bootstrap",
+    "sft_episodes": 10,
+    "total": 27,
+    "baseline_correct": 1,
+    "model_correct": 0,
+    "used_config": 27,
+    "baseline_acc": 0.037037037037037035,
+    "model_acc": 0.0
+  },
+  {
+    "round": 1,
+    "phase": "star",
+    "sft_episodes": 0,
+    "round_correct": 0,
+    "round_total": 50,
+    "round_helped": 0,
+    "total": 27,
+    "baseline_correct": 0,
+    "model_correct": 0,
+    "used_config": 26,
+    "baseline_acc": 0.0,
+    "model_acc": 0.0
+  },
+  {
+    "round": 2,
+    "phase": "star",
+    "sft_episodes": 2,
+    "round_correct": 1,
+    "round_total": 50,
+    "round_helped": 1,
+    "total": 27,
+    "baseline_correct": 0,
+    "model_correct": 0,
+    "used_config": 23,
+    "baseline_acc": 0.0,
+    "model_acc": 0.0
+  },
+  {
+    "round": 3,
+    "phase": "star",
+    "sft_episodes": 0,
+    "round_correct": 0,
+    "round_total": 50,
+    "round_helped": 0,
+    "total": 27,
+    "baseline_correct": 0,
+    "model_correct": 0,
+    "used_config": 27,
+    "baseline_acc": 0.0,
+    "model_acc": 0.0
+  }
+]
