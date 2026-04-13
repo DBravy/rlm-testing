@@ -15,6 +15,7 @@ build/
 # Model checkpoints and training outputs
 qwen3-06b-math-grpo/
 checkpoints/
+capital_checkpoints/
 *.pt
 *.bin
 *.safetensors

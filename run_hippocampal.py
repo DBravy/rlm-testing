@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from hippocampal_lora import (
