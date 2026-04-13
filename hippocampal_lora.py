@@ -319,8 +319,11 @@ class HippocampalSystem:
         Encode a single cortical state (residual stream snapshot).
         Call this sequentially during training.
         """
+        # Move to hippocampal device (model may be on GPU, hippocampus on CPU)
+        cortical_state = cortical_state.detach().to(self.device, self.dtype)
+
         # Project down to EC space
-        ec_input = self.projection.project_down(cortical_state.detach())
+        ec_input = self.projection.project_down(cortical_state)
 
         # EC superficial processing
         stellate, pyramidal = self.ec_sup.forward(ec_input)
@@ -358,8 +361,11 @@ class HippocampalSystem:
 
         Returns the recalled activation in cortical space (d_cortex).
         """
+        # Move to hippocampal device
+        cortical_state = cortical_state.detach().to(self.device, self.dtype)
+
         # Project down to EC space
-        ec_input = self.projection.project_down(cortical_state.detach())
+        ec_input = self.projection.project_down(cortical_state)
 
         # EC superficial
         stellate, pyramidal = self.ec_sup.forward(ec_input)
@@ -398,6 +404,7 @@ class HippocampalSystem:
         """
         recalled = self.recall(cortical_state)
         # Similarity between cue and recall (rough confidence measure)
+        cortical_state = cortical_state.detach().to(self.device, self.dtype)
         cue_norm = cortical_state / (torch.linalg.norm(cortical_state) + 1e-10)
         rec_norm = recalled / (torch.linalg.norm(recalled) + 1e-10)
         sim = float(torch.dot(cue_norm, rec_norm))
